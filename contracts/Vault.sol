@@ -69,14 +69,22 @@ contract Vault is Ownable {
   // Mapping of (epoch => (strike => tokens))
   mapping (uint => mapping(uint => address)) epochStrikeTokens;
 
-  // Total epoch deposits for strikes
+  // Total epoch deposits for specific strikes
   // mapping (epoch => (strike => deposits))
-  mapping (uint => mapping (uint => uint)) public totalEpochDeposits;
+  mapping (uint => mapping (uint => uint)) public totalEpochStrikeDeposits;
+  // Total epoch deposits across all strikes
+  // mapping (epoch => deposits)
+  mapping (uint => uint) public totalEpochDeposits;
+  // Epoch balances after accounting for rewards
+  // mapping (epoch => balance)
+  mapping (uint => mapping (uint => uint)) public totalEpochBalance;
   // Epoch deposits by user for each strike
   // mapping (epoch => (abi.encodePacked(user, strike) => user deposits))
   mapping (uint => mapping (bytes32 => uint)) public userEpochDeposits;
+  // Calls purchased for each strike in an epoch
   // mapping (epoch => (strike => calls purchased))
   mapping (uint => mapping (uint => uint)) public totalEpochCallsPurchased;
+  // Premium collected per strike for an epoch
   // mapping (epoch => (strike => premium))
   mapping (uint => mapping (uint => uint)) public totalEpochPremium;
 
@@ -89,6 +97,7 @@ contract Vault is Ownable {
   event LogBootstrap(uint epoch);
   event LogNewDeposit(uint epoch, uint strike, address user);
   event LogNewPurchase(uint epoch, uint strike, address user, uint amount, uint premium);
+  event LogCompound(uint epoch, uint rewards, uint oldBalance, uint newBalance);
 
   constructor(
     address _dpx,
@@ -180,8 +189,10 @@ contract Vault is Ownable {
     bytes32 userStrike = abi.encodePacked(msg.sender, strike);
     // Add to user epoch deposits
     userEpochDeposits[epoch + 1][userStrike] += amount;
+    // Add to total epoch strike deposits
+    totalEpochStrikeDeposits[epoch + 1][strike] += amount;
     // Add to total epoch deposits
-    totalEpochDeposits[epoch + 1][strike] += amount;
+    totalEpochDeposits[epoch + 1] += amount;
     // Transfer DPX from user to vault
     dpx.transferFrom(msg.sender, address(this), amount);
     // Deposit into staking rewards
@@ -262,9 +273,20 @@ contract Vault is Ownable {
   */
   function compound() 
   public {
-    uint balance = stakingRewards.balanceOf(address(this));
-    uint dpxRewardsClaimable = stakingRewards.rewardsDPX(address(this));
-
+    // Must be bootstrapped
+    require(getCurrentMonthlyEpoch() == epoch, "Epoch hasn't been bootstrapped");
+    uint oldBalance = stakingRewards.balanceOf(address(this));
+    uint rewards = stakingRewards.rewardsDPX(address(this));
+    // Compound staking rewards
+    stakingRewards.compound();
+    // Update epoch balance
+    totalEpochBalance[epoch] = stakingRewards.balanceOf(address(this));
+    emit LogCompound(
+      epoch,
+      rewards,
+      oldBalance,
+      totalEpochBalance[epoch]
+    );
   }
 
   function withdraw() 
