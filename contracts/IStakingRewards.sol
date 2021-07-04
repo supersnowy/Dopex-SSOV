@@ -8,5 +8,6 @@ interface IStakingRewards {
   function compound() public;
   function rewardsDPX(address user) public returns (uint256);
   function balanceOf(address user) public returns (uint256);
+  function getReward(uint256 id) public;
 
 }

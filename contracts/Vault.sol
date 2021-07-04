@@ -53,8 +53,9 @@ contract Vault is Ownable {
 
   // DPX token
   IERC20 public dpx;
-  // USDC token
-  IERC20 public usdc;
+
+  // rDPX token
+  IERC20 public rdpx;
   // DPX single staking rewards contract
   IStakingRewards public stakingRewards;
   // Option pricing provider
@@ -75,23 +76,21 @@ contract Vault is Ownable {
   // Total epoch deposits across all strikes
   // mapping (epoch => deposits)
   mapping (uint => uint) public totalEpochDeposits;
-  // Epoch balances after accounting for rewards
-  // mapping (epoch => balance)
-  mapping (uint => mapping (uint => uint)) public totalEpochBalance;
   // Epoch deposits by user for each strike
   // mapping (epoch => (abi.encodePacked(user, strike) => user deposits))
   mapping (uint => mapping (bytes32 => uint)) public userEpochDeposits;
+  // Epoch DPX balance after accounting for rewards
+  // mapping (epoch => balance)
+  mapping (uint => uint) public totalEpochDpxBalance;
+  // Epoch rDPX balance after accounting for rewards
+  // mapping (epoch => balance)
+  mapping (uint => uint) public totalEpochRdpxBalance;
   // Calls purchased for each strike in an epoch
   // mapping (epoch => (strike => calls purchased))
   mapping (uint => mapping (uint => uint)) public totalEpochCallsPurchased;
   // Premium collected per strike for an epoch
   // mapping (epoch => (strike => premium))
   mapping (uint => mapping (uint => uint)) public totalEpochPremium;
-
-  // DPX rewards threshold after which users calling compound receive a 0.1% fee
-  uint public REWARDS_THRESHOLD = 1 ether;
-  // Fee for calling compound() after crossing rewards threshold. 3 precision (100/1000 = 0.1%)
-  uint public COMPOUND_FEE = 100;
 
   event LogNewStrike(uint epoch, uint strike);
   event LogBootstrap(uint epoch);
@@ -101,16 +100,16 @@ contract Vault is Ownable {
 
   constructor(
     address _dpx,
-    address _usdc,
+    address _rdpx,
     address _stakingRewards,
     address _optionPricing
   ) {
     require(_dpx != address(0), "Invalid dpx address");
-    require(_usdc != address(0), "Invalid usdc address");
+    require(_rdpx != address(0), "Invalid rdpx address");
     require(_stakingRewards != address(0), "Invalid staking rewards address");
     require(_optionPricing != address(0), "Invalid option pricing address");
     dpx = IERC20(_dpx);
-    usdc = IERC20(_usdc);
+    rdpx = IERC20(_rdpx);
     _stakingRewards = IStakingRewards(_stakingRewards);
     _optionPricing = IOptionPricing(_optionPricing);
   }
@@ -128,8 +127,13 @@ contract Vault is Ownable {
     if (epoch == 0) {
       epochInitTime = block.timestamp;
     } else {
-      // TODO: Unstake all tokens from previous epoch
-
+      // Unstake all tokens from previous epoch
+      stakingRewards.withdraw(stakingRewards.balanceOf(address(this)));
+      // Claim DPX and RDPX rewards
+      stakingRewards.getReward(2);
+      // Update final dpx and rdpx balances for epoch
+      totalEpochDpxBalance[epoch] = dpx.balanceOf(address(this));
+      totalEpochRdpxBalance[epoch] = rdpx.balanceOf(address(this));
     }
     for (uint i = 0; i < epochStrikes[epoch + 1].length; i++) {
       uint strike = epochStrikes[epoch + 1][i];
@@ -146,7 +150,7 @@ contract Vault is Ownable {
       IERC20(epochStrikeTokens[epoch + 1][strike])
         .mint(
           address(this), 
-          totalEpochDeposits[epoch + 1][strike]
+          totalEpochStrikeDeposits[epoch + 1][strike]
         );
     }
     epoch += 1;
@@ -237,16 +241,16 @@ contract Vault is Ownable {
     // Add to total epoch calls purchased
     totalEpochCallsPurchased[epoch][strike] += amount;
     // Get total premium for all calls being purchased
-    // TODO: Handle USDC precision (6 decimals)
     uint premium = optionPricing.getOptionPrice(
       false, 
       strike,
       getMonthlyExpiryFromTimestamp(block.timestamp)
-    ).mul(amount);
+    ).mul(amount)
+    .div(getUsdPrice(address(dpx)));
     // Add to total epoch premium
     totalEpochPremium[epoch][strike] += premium;
     // Transfer usd equivalent to premium from user
-    usdc.transferFrom(
+    dpx.transferFrom(
       msg.sender,
       address(this),
       premium
@@ -268,7 +272,7 @@ contract Vault is Ownable {
   }
 
   /**
-  * Allows anyone to call compound(). Pays a 0.1% fee if total rewards is greater than rewards threshold
+  * Allows anyone to call compound()
   * @return Whether compound was successful
   */
   function compound() 
@@ -280,17 +284,38 @@ contract Vault is Ownable {
     // Compound staking rewards
     stakingRewards.compound();
     // Update epoch balance
-    totalEpochBalance[epoch] = stakingRewards.balanceOf(address(this));
+    totalEpochDpxBalance[epoch] = stakingRewards.balanceOf(address(this));
     emit LogCompound(
       epoch,
       rewards,
       oldBalance,
-      totalEpochBalance[epoch]
+      totalEpochDpxBalance[epoch]
     );
   }
 
-  function withdraw() 
-  public {
+  /**
+  * Withdraws balances for a strike in a completed epoch
+  * @param epoch Epoch to withdraw from
+  * @param strikeIndex Index of strike
+  * @return Whether withdraw was successful
+  */
+  function withdrawForStrike(
+    uint withdrawEpoch,
+    uint strikeIndex
+  ) 
+  public 
+  returns (bool) {
+    require(
+      withdrawEpoch < epoch && 
+      epoch == getCurrentMonthlyEpoch(), 
+      "Withdraw epoch must be in the past"
+    );
+    require(epochStrikes[withdrawEpoch][strikeIndex] != 0, "Invalid strike");
+
+    uint strike = epochStrikes[withdrawEpoch][strikeIndex];
+    uint userStrikeDeposits = userEpochDeposits[withdrawEpoch][abi.encodePacked(msg.sender, strike)];
+    uint totalStrikeDeposits = totalEpochStrikeDeposits[withdrawEpoch][strike];
+
 
   }
 
@@ -418,6 +443,13 @@ contract Vault is Ownable {
   pure
   returns(string memory) {
     return string(abi.encodePacked(a, b));
+  }
+
+  function getUsdPrice(address _token)
+  public
+  view
+  returns (uint256) {
+    // TODO: Return price fo token from uni
   }
 
 }
