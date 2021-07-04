@@ -134,8 +134,8 @@ contract Vault is Ownable {
     for (uint i = 0; i < epochStrikes[epoch + 1].length; i++) {
       uint strike = epochStrikes[epoch + 1][i];
       string memory name = concatenate("DPX-CALL", strike);
-      token = concatenate(token, "-EPOCH-");
-      token = concatenate(token, epoch + 1);
+      name = concatenate(token, "-EPOCH-");
+      name = concatenate(token, epoch + 1);
       // Create doTokens representing calls for selected strike in epoch
       epochStrikeTokens[epoch + 1][strike] = 
         new ERC20PresetMinterPauser(
