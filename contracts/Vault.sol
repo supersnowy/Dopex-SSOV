@@ -12,6 +12,7 @@ import {ERC20PresetMinterPauser} from "@openzeppelin/contracts/token/ERC20/prese
 import {BokkyPooBahsDateTimeLibrary} from './libraries/BokkyPooBahsDateTimeLibrary.sol';
 
 import "./IStakingRewards.sol";
+import "./IOptionPricing.sol";
 
 contract Vault is Ownable {
 
@@ -20,8 +21,14 @@ contract Vault is Ownable {
   using SafeMath for uint;
   using SafeERC20 for IERC20;
 
+  // DPX token
   IERC20 public dpx;
+  // USDC token
+  IERC20 public usdc;
+  // DPX single staking rewards contract
   IStakingRewards public stakingRewards;
+  // Option pricing provider
+  IOptionPricing public optionPricing;
 
   // Current epoch for vault
   uint public epoch;
@@ -38,19 +45,30 @@ contract Vault is Ownable {
   // Epoch deposits by user for each strike
   // mapping (epoch => (abi.encodePacked(user, strike) => user deposits))
   mapping (uint => mapping (bytes32 => uint)) public userEpochDeposits;
+  // mapping (epoch => (strike => calls purchased))
+  mapping (uint => mapping (uint => uint)) public totalEpochCallsPurchased;
+  // mapping (epoch => (strike => premium))
+  mapping (uint => mapping (uint => uint)) public totalEpochPremium;
 
   event LogNewStrike(uint epoch, uint strike);
   event LogBootstrap(uint epoch);
   event LogNewDeposit(uint epoch, uint strike, address user);
+  event LogNewPurchase(uint epoch, uint strike, address user, uint amount, uint premium);
 
   constructor(
     address _dpx,
-    address _stakingRewards
+    address _usdc,
+    address _stakingRewards,
+    address _optionPricing
   ) {
     require(_dpx != address(0), "Invalid dpx address");
+    require(_usdc != address(0), "Invalid usdc address");
     require(_stakingRewards != address(0), "Invalid staking rewards address");
+    require(_optionPricing != address(0), "Invalid option pricing address");
     dpx = IERC20(_dpx);
+    usdc = IERC20(_usdc);
     _stakingRewards = IStakingRewards(_stakingRewards);
+    _optionPricing = IOptionPricing(_optionPricing);
   }
 
   /**
@@ -86,6 +104,7 @@ contract Vault is Ownable {
     }
     epoch += 1;
     emit LogBootstrap(epoch);
+    return true;
   }
 
   /**
@@ -102,6 +121,7 @@ contract Vault is Ownable {
     epochStrikes[epoch + 1] = strikes;
     for (uint i = 0; i < strikes.length; i++)
       emit LogNewStrike(epoch + 1, strike[i]);
+    return true;
   }
 
   /**
@@ -129,6 +149,7 @@ contract Vault is Ownable {
     // Deposit into staking rewards
     stakingRewards.stake(amount);
     emit LogNewDeposit(epoch + 1, strike, msg.sender);
+    return true;
   }
 
   /**
@@ -144,11 +165,52 @@ contract Vault is Ownable {
   returns (bool) {
     for (uint i = 0; i < strikeIndices.length; i++)
       deposit(strikeIndices[i], amounts[i]);
+    return true;
   }
 
-  function purchase() 
-  public {
-
+  /** 
+  * Purchases calls for the current epoch
+  * @param strikeIndex Strike index for current epoch
+  * @param amount Amount of calls to purchase
+  * @return Whether purchase was successful
+  */
+  function purchase(
+    uint strikeIndex,
+    uint amount
+  ) 
+  public 
+  returns (bool) {
+    // Must be bootstrapped
+    require(getCurrentMonthlyEpoch() == epoch, "Epoch hasn't been bootstrapped");
+    uint strike = epochStrikes[epoch][strikeIndex];
+    // Must be a valid strike
+    require(strike != 0, "Invalid strike");
+    // Add to total epoch calls purchased
+    totalEpochCallsPurchased[epoch][strike] += amount;
+    // Get total premium for all calls being purchased
+    // TODO: Handle USDC precision (6 decimals)
+    uint premium = optionPricing.getOptionPrice(
+      false, 
+      strike,
+      getMonthlyExpiryFromTimestamp(block.timestamp)
+    ).mul(amount);
+    // Add to total epoch premium
+    totalEpochPremium[epoch][strike] += premium;
+    // Transfer usd equivalent to premium from user
+    usdc.transferFrom(
+      msg.sender,
+      address(this),
+      premium
+    );
+    // Transfer doTokens to user
+    IERC20(epochStrikeTokens[epoch][strike]).transfer(msg.sender, amount);
+    emit LogNewPurchase(
+      epoch,
+      strike,
+      msg.sender,
+      amount,
+      premium
+    );
   }
 
   function exercise() 
