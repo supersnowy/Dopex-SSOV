@@ -126,6 +126,8 @@ contract Vault is Ownable {
     totalEpochDeposits[epoch + 1][strike] += amount;
     // Transfer DPX from user to vault
     dpx.transferFrom(msg.sender, address(this), amount);
+    // Deposit into staking rewards
+    stakingRewards.stake(amount);
     emit LogNewDeposit(epoch + 1, strike, msg.sender);
   }
 
