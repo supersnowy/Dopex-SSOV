@@ -20,7 +20,7 @@ contract Vault is Ownable {
   using SafeMath for uint;
   using SafeERC20 for IERC20;
 
-  address public dpx;
+  IERC20 public dpx;
   IStakingRewards public stakingRewards;
 
   // Current epoch for vault
@@ -41,6 +41,7 @@ contract Vault is Ownable {
 
   event LogNewStrike(uint epoch, uint strike);
   event LogBootstrap(uint epoch);
+  event LogNewDeposit(uint epoch, uint strike, address user);
 
   constructor(
     address _dpx,
@@ -48,12 +49,12 @@ contract Vault is Ownable {
   ) {
     require(_dpx != address(0), "Invalid dpx address");
     require(_stakingRewards != address(0), "Invalid staking rewards address");
-    dpx = _dpx;
+    dpx = IERC20(_dpx);
     _stakingRewards = IStakingRewards(_stakingRewards);
   }
 
   /**
-  * Bootstraps a new epoch and mints optio tokens equivalent to user deposits for the epoch
+  * Bootstraps a new epoch and mints option tokens equivalent to user deposits for the epoch
   * @return Whether bootstrap was successful
   */
   function bootstrap() 
@@ -110,12 +111,37 @@ contract Vault is Ownable {
   * @return Whether deposit was successful
   */
   function deposit(
-    uint strike,
+    uint strikeIndex,
     uint amount
   ) 
   public 
   returns (bool) {
+    uint strike = epochStrikes[epoch + 1][strikeIndex];
+    // Must be a valid strike
+    require(strike != 0, "Invalid strike");
+    bytes32 userStrike = abi.encodePacked(msg.sender, strike);
+    // Add to user epoch deposits
+    userEpochDeposits[epoch + 1][userStrike] += amount;
+    // Add to total epoch deposits
+    totalEpochDeposits[epoch + 1][strike] += amount;
+    // Transfer DPX from user to vault
+    dpx.transferFrom(msg.sender, address(this), amount);
+    emit LogNewDeposit(epoch + 1, strike, msg.sender);
+  }
 
+  /**
+  * Deposit DPX multiple times
+  * @param strikeIndices Indices of strikes to deposit into
+  * @param amounts Amount of DPX to deposit into each strike index
+  * @return Whether deposits went through successfully
+  */
+  function depositMultiple(
+    uint[] strikeIndices,
+    uint[] amounts
+  ) public
+  returns (bool) {
+    for (uint i = 0; i < strikeIndices.length; i++)
+      deposit(strikeIndices[i], amounts[i]);
   }
 
   function purchase() 
