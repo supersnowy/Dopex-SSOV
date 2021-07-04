@@ -80,6 +80,11 @@ contract Vault is Ownable {
   // mapping (epoch => (strike => premium))
   mapping (uint => mapping (uint => uint)) public totalEpochPremium;
 
+  // DPX rewards threshold after which users calling compound receive a 0.1% fee
+  uint public REWARDS_THRESHOLD = 1 ether;
+  // Fee for calling compound() after crossing rewards threshold. 3 precision (100/1000 = 0.1%)
+  uint public COMPOUND_FEE = 100;
+
   event LogNewStrike(uint epoch, uint strike);
   event LogBootstrap(uint epoch);
   event LogNewDeposit(uint epoch, uint strike, address user);
@@ -113,6 +118,9 @@ contract Vault is Ownable {
     require(getCurrentMonthlyEpoch() == epoch + 1, "Epoch hasn't completed yet");
     if (epoch == 0) {
       epochInitTime = block.timestamp;
+    } else {
+      // TODO: Unstake all tokens from previous epoch
+
     }
     for (uint i = 0; i < epochStrikes[epoch + 1].length; i++) {
       uint strike = epochStrikes[epoch + 1][i];
@@ -248,8 +256,14 @@ contract Vault is Ownable {
 
   }
 
+  /**
+  * Allows anyone to call compound(). Pays a 0.1% fee if total rewards is greater than rewards threshold
+  * @return Whether compound was successful
+  */
   function compound() 
   public {
+    uint balance = stakingRewards.balanceOf(address(this));
+    uint dpxRewardsClaimable = stakingRewards.rewardsDPX(address(this));
 
   }
 
